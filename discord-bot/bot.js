@@ -1,15 +1,12 @@
 const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder } = require('discord.js');
 const { spawn } = require('child_process');
-const { execSync } = require('child_process');
 const path = require('path');
 require('dotenv').config();
 
 // ─── Config ───
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
-const NGROK_AUTH_TOKEN = process.env.NGROK_AUTH_TOKEN;
 const MC_SERVER_DIR = process.env.MC_SERVER_DIR || path.resolve(__dirname, '..');
-const MC_PORT = parseInt(process.env.MC_PORT || '25565', 10);
 
 // ─── State ───
 let mcProcess = null;
@@ -43,59 +40,25 @@ async function registerCommands() {
   }
 }
 
-// ─── Ngrok ───
-async function startNgrok() {
-  try {
-    // Kill any existing ngrok processes
-    try { execSync('pkill -f ngrok 2>/dev/null || true'); } catch {}
-
-    console.log('[Ngrok] Starting tunnel on port', MC_PORT);
-
-    // Start ngrok as background process
-    const ngrokProcess = spawn('ngrok', ['tcp', String(MC_PORT), '--log=stdout', '--log-level=info'], {
-      detached: true,
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    ngrokProcess.unref();
-
-    // Wait for ngrok to start, then get the URL from the API
-    await new Promise(resolve => setTimeout(resolve, 3000));
-
-    const response = await fetch('http://127.0.0.1:4040/api/tunnels');
-    const data = await response.json();
-
-    if (data.tunnels && data.tunnels.length > 0) {
-      ngrokUrl = data.tunnels[0].public_url.replace('tcp://', '');
-      console.log('[Ngrok] Tunnel URL:', ngrokUrl);
-      return ngrokUrl;
-    }
-
-    throw new Error('No tunnels found');
-  } catch (err) {
-    console.error('[Ngrok] Error:', err.message);
-    // Retry with alternative method
+// ─── Ngrok (read from existing ngrok process managed by pm2) ───
+async function fetchNgrokUrl() {
+  const maxRetries = 5;
+  for (let i = 0; i < maxRetries; i++) {
     try {
-      await new Promise(resolve => setTimeout(resolve, 2000));
       const response = await fetch('http://127.0.0.1:4040/api/tunnels');
       const data = await response.json();
       if (data.tunnels && data.tunnels.length > 0) {
         ngrokUrl = data.tunnels[0].public_url.replace('tcp://', '');
-        console.log('[Ngrok] Tunnel URL (retry):', ngrokUrl);
+        console.log('[Ngrok] Tunnel URL:', ngrokUrl);
         return ngrokUrl;
       }
     } catch {}
-    ngrokUrl = null;
-    return null;
+    console.log(`[Ngrok] Waiting for ngrok... (${i + 1}/${maxRetries})`);
+    await new Promise(resolve => setTimeout(resolve, 3000));
   }
-}
-
-async function stopNgrok() {
-  try {
-    execSync('pkill -f ngrok 2>/dev/null || true');
-    ngrokUrl = null;
-    console.log('[Ngrok] Stopped.');
-  } catch {}
+  console.error('[Ngrok] Could not get tunnel URL. Is ngrok running? (pm2 status ngrok)');
+  ngrokUrl = null;
+  return null;
 }
 
 // ─── Minecraft Server ───
@@ -263,7 +226,7 @@ client.on('interactionCreate', async (interaction) => {
       await startMinecraftServer();
 
       // Start ngrok tunnel
-      const url = await startNgrok();
+      const url = await fetchNgrokUrl();
 
       if (url) {
         await sendServerOnline(url);
@@ -300,7 +263,7 @@ client.on('interactionCreate', async (interaction) => {
 
     try {
       await stopMinecraftServer();
-      await stopNgrok();
+      ngrokUrl = null;
 
       await interaction.editReply({ embeds: [
         new EmbedBuilder().setColor(0xff0000).setTitle('🔴 Server Stopped').setDescription('เซิร์ฟเวอร์ปิดแล้ว')
@@ -366,7 +329,7 @@ if (process.env.AUTO_START === 'true') {
     console.log('[Bot] AUTO_START enabled. Starting server...');
     try {
       await startMinecraftServer();
-      const url = await startNgrok();
+      const url = await fetchNgrokUrl();
       if (url) await sendServerOnline(url);
     } catch (err) {
       console.error('[Bot] Auto-start failed:', err);
@@ -380,7 +343,6 @@ async function gracefulShutdown(signal) {
   if (mcProcess) {
     await stopMinecraftServer();
   }
-  await stopNgrok();
   client.destroy();
   process.exit(0);
 }
