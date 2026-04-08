@@ -1,0 +1,4 @@
+# Discord Bot
+discord-bot/node_modules/
+discord-bot/logs/
+discord-bot/.env

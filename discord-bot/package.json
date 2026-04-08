@@ -1,0 +1,14 @@
+{
+  "name": "catbot-minecraft-discord",
+  "version": "1.0.0",
+  "description": "Discord bot for managing Minecraft server with ngrok",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "discord.js": "^14.16.3",
+    "dotenv": "^16.4.7",
+    "ngrok": "^5.0.0-beta.2"
+  }
+}
