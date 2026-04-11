@@ -1,4 +1,4 @@
-const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder } = require('discord.js');
+const { Client, GatewayIntentBits, EmbedBuilder, REST, Routes, SlashCommandBuilder, ActionRowBuilder, ButtonBuilder, ButtonStyle } = require('discord.js');
 const { spawn } = require('child_process');
 const path = require('path');
 require('dotenv').config();
@@ -173,7 +173,7 @@ async function sendServerOnline(url) {
       .setFooter({ text: 'CatBot Minecraft' })
       .setTimestamp();
 
-    await channel.send({ content: '||@everyone||', embeds: [embed] });
+    await channel.send({ content: '||@everyone||', embeds: [embed], components: [getServerButtons()] });
     console.log('[Bot] Server online message sent.');
   } catch (err) {
     console.error('[Bot] Failed to send online message:', err);
@@ -190,17 +190,40 @@ async function notifyServerOffline(exitCode) {
       .setFooter({ text: 'CatBot Minecraft' })
       .setTimestamp();
 
-    await channel.send({ embeds: [embed] });
+    await channel.send({ embeds: [embed], components: [getServerButtons()] });
   } catch (err) {
     console.error('[Bot] Failed to send offline message:', err);
   }
 }
 
+// ─── Buttons ───
+function getServerButtons() {
+  return new ActionRowBuilder().addComponents(
+    new ButtonBuilder().setCustomId('btn_start').setLabel('Start').setStyle(ButtonStyle.Success).setEmoji('🟢'),
+    new ButtonBuilder().setCustomId('btn_stop').setLabel('Stop').setStyle(ButtonStyle.Danger).setEmoji('🔴'),
+    new ButtonBuilder().setCustomId('btn_status').setLabel('Status').setStyle(ButtonStyle.Primary).setEmoji('📊'),
+    new ButtonBuilder().setCustomId('btn_ip').setLabel('IP').setStyle(ButtonStyle.Secondary).setEmoji('🌐'),
+  );
+}
+
 // ─── Command Handlers ───
 client.on('interactionCreate', async (interaction) => {
-  if (!interaction.isChatInputCommand()) return;
+  // Handle button clicks
+  if (interaction.isButton()) {
+    const buttonMap = {
+      btn_start: 'start',
+      btn_stop: 'stop',
+      btn_status: 'status',
+      btn_ip: 'ip',
+    };
+    const commandName = buttonMap[interaction.customId];
+    if (!commandName) return;
+    // Re-route to command logic below
+    interaction._buttonCommand = commandName;
+  }
 
-  const { commandName } = interaction;
+  const commandName = interaction._buttonCommand || (interaction.isChatInputCommand() ? interaction.commandName : null);
+  if (!commandName) return;
 
   if (commandName === 'start') {
     if (serverStatus === 'online' || serverStatus === 'starting') {
@@ -209,7 +232,7 @@ client.on('interactionCreate', async (interaction) => {
         .setTitle('⚠️ Server Already Running')
         .setDescription(serverStatus === 'starting' ? 'เซิร์ฟเวอร์กำลังเปิดอยู่ รอสักครู่...' : 'เซิร์ฟเวอร์เปิดอยู่แล้ว!');
       if (ngrokUrl) embed.addFields({ name: '🌐 IP', value: `\`${ngrokUrl}\`` });
-      await interaction.reply({ embeds: [embed] });
+      await interaction.reply({ embeds: [embed], components: [getServerButtons()] });
       return;
     }
 
@@ -234,20 +257,20 @@ client.on('interactionCreate', async (interaction) => {
           .setColor(0x00ff00)
           .setTitle('✅ Server Started!')
           .addFields({ name: '🌐 IP', value: `\`${url}\`` });
-        await interaction.editReply({ embeds: [successEmbed] });
+        await interaction.editReply({ embeds: [successEmbed], components: [getServerButtons()] });
       } else {
         const warnEmbed = new EmbedBuilder()
           .setColor(0xffaa00)
           .setTitle('⚠️ Server Started (No Ngrok)')
           .setDescription('เซิร์ฟเวอร์เปิดแล้ว แต่ไม่สามารถสร้าง ngrok tunnel ได้');
-        await interaction.editReply({ embeds: [warnEmbed] });
+        await interaction.editReply({ embeds: [warnEmbed], components: [getServerButtons()] });
       }
     } catch (err) {
       const errorEmbed = new EmbedBuilder()
         .setColor(0xff0000)
         .setTitle('❌ Start Failed')
         .setDescription(`เกิดข้อผิดพลาด: ${err.message}`);
-      await interaction.editReply({ embeds: [errorEmbed] });
+      await interaction.editReply({ embeds: [errorEmbed], components: [getServerButtons()] });
     }
   }
 
@@ -255,7 +278,7 @@ client.on('interactionCreate', async (interaction) => {
     if (serverStatus === 'offline') {
       await interaction.reply({ embeds: [
         new EmbedBuilder().setColor(0xffaa00).setTitle('⚠️ Server Not Running').setDescription('เซิร์ฟเวอร์ไม่ได้เปิดอยู่')
-      ]});
+      ], components: [getServerButtons()] });
       return;
     }
 
@@ -267,15 +290,18 @@ client.on('interactionCreate', async (interaction) => {
 
       await interaction.editReply({ embeds: [
         new EmbedBuilder().setColor(0xff0000).setTitle('🔴 Server Stopped').setDescription('เซิร์ฟเวอร์ปิดแล้ว')
-      ]});
+      ], components: [getServerButtons()] });
     } catch (err) {
       await interaction.editReply({ embeds: [
         new EmbedBuilder().setColor(0xff0000).setTitle('❌ Stop Failed').setDescription(`เกิดข้อผิดพลาด: ${err.message}`)
-      ]});
+      ], components: [getServerButtons()] });
     }
   }
 
   else if (commandName === 'status') {
+    // ดึง IP ล่าสุดจาก ngrok ทุกครั้ง
+    await fetchNgrokUrl();
+
     const statusMap = {
       offline: { color: 0xff0000, emoji: '🔴', text: 'Offline' },
       starting: { color: 0xffaa00, emoji: '🟡', text: 'Starting...' },
@@ -293,10 +319,13 @@ client.on('interactionCreate', async (interaction) => {
 
     if (ngrokUrl) embed.addFields({ name: '🌐 IP', value: `\`${ngrokUrl}\``, inline: false });
 
-    await interaction.reply({ embeds: [embed] });
+    await interaction.reply({ embeds: [embed], components: [getServerButtons()] });
   }
 
   else if (commandName === 'ip') {
+    // ดึง IP ล่าสุดจาก ngrok ทุกครั้ง
+    await fetchNgrokUrl();
+
     if (ngrokUrl) {
       await interaction.reply({ embeds: [
         new EmbedBuilder()
@@ -304,14 +333,14 @@ client.on('interactionCreate', async (interaction) => {
           .setTitle('🌐 Server IP')
           .setDescription(`\`${ngrokUrl}\``)
           .setFooter({ text: 'คัดลอก IP ด้านบนไปวางใน Minecraft' })
-      ]});
+      ], components: [getServerButtons()] });
     } else {
       await interaction.reply({ embeds: [
         new EmbedBuilder()
           .setColor(0xff0000)
           .setTitle('🌐 Server IP')
           .setDescription('เซิร์ฟเวอร์ยังไม่ได้เปิด หรือ ngrok ยังไม่พร้อม')
-      ]});
+      ], components: [getServerButtons()] });
     }
   }
 });
