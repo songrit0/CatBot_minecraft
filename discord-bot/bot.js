@@ -72,7 +72,7 @@ function startMinecraftServer() {
     serverStatus = 'starting';
     console.log('[MC] Starting Minecraft server in', MC_SERVER_DIR);
 
-    mcProcess = spawn('bash', ['start.sh'], {
+    mcProcess = spawn('cmd', ['/c', 'start.bat'], {
       cwd: MC_SERVER_DIR,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, WAIT_FOR_USER_INPUT: 'false' },
@@ -143,7 +143,7 @@ function stopMinecraftServer() {
     const timeout = setTimeout(() => {
       if (mcProcess) {
         console.log('[MC] Force killing server...');
-        mcProcess.kill('SIGKILL');
+        spawn('taskkill', ['/pid', mcProcess.pid.toString(), '/f', '/t']);
       }
     }, 30000);
 
