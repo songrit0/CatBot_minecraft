@@ -6,12 +6,15 @@ require('dotenv').config();
 // ─── Config ───
 const DISCORD_TOKEN = process.env.DISCORD_TOKEN;
 const CHANNEL_ID = process.env.CHANNEL_ID;
+const LOG_CHANNEL_ID = process.env.LOG_CHANNEL_ID;
 const MC_SERVER_DIR = process.env.MC_SERVER_DIR || path.resolve(__dirname, '..');
 
 // ─── State ───
 let mcProcess = null;
 let ngrokUrl = null;
 let serverStatus = 'offline'; // offline, starting, online, stopping
+let logBuffer = '';
+let logTimer = null;
 
 // ─── Discord Client ───
 const client = new Client({
@@ -61,6 +64,27 @@ async function fetchNgrokUrl() {
   return null;
 }
 
+// ─── Log to Discord ───
+function sendLogToDiscord(text) {
+  if (!LOG_CHANNEL_ID) return;
+  logBuffer += text;
+  // รวม log แล้วส่งทุก 2 วินาที ไม่ให้ spam
+  if (logTimer) return;
+  logTimer = setTimeout(async () => {
+    if (!logBuffer) { logTimer = null; return; }
+    try {
+      const channel = await client.channels.fetch(LOG_CHANNEL_ID);
+      // Discord จำกัด 2000 ตัวอักษร ตัดเอาท้ายสุด
+      const msg = logBuffer.length > 1900 ? '...\n' + logBuffer.slice(-1900) : logBuffer;
+      await channel.send(`\`\`\`\n${msg}\n\`\`\``);
+    } catch (err) {
+      console.error('[Log] Failed to send log:', err.message);
+    }
+    logBuffer = '';
+    logTimer = null;
+  }, 2000);
+}
+
 // ─── Minecraft Server ───
 function startMinecraftServer() {
   return new Promise((resolve, reject) => {
@@ -72,7 +96,7 @@ function startMinecraftServer() {
     serverStatus = 'starting';
     console.log('[MC] Starting Minecraft server in', MC_SERVER_DIR);
 
-    mcProcess = spawn('cmd', ['/c', 'start.bat'], {
+    mcProcess = spawn('bash', ['start.sh'], {
       cwd: MC_SERVER_DIR,
       stdio: ['pipe', 'pipe', 'pipe'],
       env: { ...process.env, WAIT_FOR_USER_INPUT: 'false' },
@@ -83,6 +107,7 @@ function startMinecraftServer() {
     mcProcess.stdout.on('data', (data) => {
       const line = data.toString();
       process.stdout.write(`[MC] ${line}`);
+      sendLogToDiscord(line);
 
       // Detect when server is ready
       if (!serverReady && (line.includes('Done (') || line.includes('For help, type "help"'))) {
@@ -96,6 +121,7 @@ function startMinecraftServer() {
     mcProcess.stderr.on('data', (data) => {
       const line = data.toString();
       process.stderr.write(`[MC-ERR] ${line}`);
+      sendLogToDiscord(`[ERR] ${line}`);
     });
 
     mcProcess.on('close', (code) => {
@@ -143,7 +169,7 @@ function stopMinecraftServer() {
     const timeout = setTimeout(() => {
       if (mcProcess) {
         console.log('[MC] Force killing server...');
-        spawn('taskkill', ['/pid', mcProcess.pid.toString(), '/f', '/t']);
+        mcProcess.kill('SIGKILL');
       }
     }, 30000);
 
